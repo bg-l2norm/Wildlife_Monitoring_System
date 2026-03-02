@@ -26,7 +26,6 @@ from threading import Lock, Thread
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime
 from dotenv import load_dotenv
-
 # AI Model imports
 from inference import get_model
 
@@ -43,7 +42,8 @@ ROBOFLOW_API_KEY = os.getenv('ROBOFLOW_API_KEY')
 # --- Trackers to prevent notification spam ---
 sensor_alert_history = {"motion": 0, "tilt": 0, "gunshot": 0}
 SENSOR_COOLDOWN = 5  # Wait 5 seconds before repeating sensor alerts
-
+# confidence
+WEAPON_CONFIDENCE_THRESHOLD = 0.30
 # --- Define Folder Paths ---
 BASE_DIR = os.getcwd()
 MODEL_FOLDER = os.path.join(BASE_DIR, "speciesnet_model")
@@ -111,6 +111,12 @@ class DetectionResult(db.Model):
     confidence = db.Column(db.Float, nullable=False)
     timestamp_in_video = db.Column(db.Float, nullable=False)
     image_url = db.Column(db.String(255), nullable=True)
+class SensorEvent(db.Model):
+    """Database table to store ESP32 hardware sensor alerts."""
+    id = db.Column(db.Integer, primary_key=True)
+    event_type = db.Column(db.String(50), nullable=False)  # e.g., 'motion', 'tilt', 'gunshot'
+    value = db.Column(db.Float, nullable=True)             # e.g., the specific tilt angle
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
 
 # Create the database file if it doesn't exist
 with app.app_context(): db.create_all()
@@ -156,7 +162,7 @@ class ModelManager:
             
             # 2. Load Weapon Model to CPU
             print("⏳ Loading Weapon Model...")
-            self.weapon_model = get_model(model_id="rifle-1b8vx/1", api_key=ROBOFLOW_API_KEY)
+            self.weapon_model = get_model(model_id="rifle-1b8vx/2", api_key=ROBOFLOW_API_KEY)
             print("✅ Weapon Model Loaded Successfully (CPU)")
             
             self._warmup()
@@ -324,7 +330,7 @@ class BatchVideoProcessor:
                                 print(f"👤 Human spotted at {time_sec:.1f}s. Running Weapon Scan on CPU...")
                                 
                                 # Run inference on the Intel i5 CPU
-                                weapon_res = self.model_manager.weapon_model.infer(img, confidence=0.5)
+                                weapon_res = self.model_manager.weapon_model.infer(img,confidence=WEAPON_CONFIDENCE_THRESHOLD)
                                 
                                 # If weapon found...
                                 if len(weapon_res[0].predictions) > 0:
@@ -367,18 +373,19 @@ class BatchVideoProcessor:
                                     alert_history[common_name] = time_sec
                     # Log the original SpeciesNet detection to the database
                    # Log the original SpeciesNet detection to the database (excluding blanks)
-                    if common_name.lower() not in ["blank", "unknown", "none"]:
-                        valid_detections.append({
-                            "species": common_name, "confidence": float(top_score),
-                            "timestamp": time_sec, "image_url": image_url
-                        })
-                    
-                    # Inject an extra high-priority log into the DB so the dashboard shows "ARMED HUMAN" in red
+                    # If it's a human WITH a weapon, completely override the normal human log
                     if is_weapon_threat:
                         valid_detections.append({
                             "species": "ARMED HUMAN", "confidence": weapon_conf,
                             "timestamp": time_sec, "image_url": image_url
                         })
+                    else:
+                        # Log normal wildlife and unarmed humans
+                        if common_name.lower() not in ["blank", "unknown", "none"]:
+                            valid_detections.append({
+                                "species": common_name, "confidence": float(top_score),
+                                "timestamp": time_sec, "image_url": image_url
+                            })
 
             return valid_detections
         except Exception as e:
@@ -409,6 +416,14 @@ def on_mqtt_message(client, userdata, msg):
     current_time = time.time()
     last_seen = current_time
 
+    # Helper function to save to DB from a background thread
+    def log_event_to_db(event_type, value=None):
+        with app.app_context():
+            new_event = SensorEvent(event_type=event_type, value=value)
+            db.session.add(new_event)
+            db.session.commit()
+            print(f"💾 Logged {event_type.upper()} event to database.")
+
     try:
         payload = msg.payload.decode('utf-8')
         data = json.loads(payload)
@@ -423,26 +438,37 @@ def on_mqtt_message(client, userdata, msg):
                 if k == "gunshot" and data[k] == 1: 
                     gunshot_timestamp = current_time
 
-        # Sensor-specific Telegram alerts
+        # Sensor-specific logic and logging
         if msg.topic == "security/events":
+            
+            # 1. MOTION
             if data.get('motion') == 1:
                 if (current_time - sensor_alert_history['motion']) > SENSOR_COOLDOWN:
                     msg_text = f"🏃 *MOTION DETECTED* 🏃\n\n⏱️ *Time:* {datetime.now().strftime('%H:%M:%S')}\n📍 *Unit:* Field Cam 01"
                     Thread(target=send_telegram_alert, args=(msg_text,)).start()
+                    log_event_to_db("motion") # Save to DB
                     sensor_alert_history['motion'] = current_time
 
+            # 2. TILT
             tilt_val = data.get('tilt', 0.0)
             if tilt_val > 30: # If camera falls off tree
                 if (current_time - sensor_alert_history['tilt']) > SENSOR_COOLDOWN:
                     msg_text = f"⚠️ *DEVICE TILT WARNING* ⚠️\n\n📉 *Angle:* {tilt_val}°\n📍 *Unit:* Field Cam 01\nCheck mounting immediately."
                     Thread(target=send_telegram_alert, args=(msg_text,)).start()
+                    log_event_to_db("tilt", tilt_val) # Save to DB with angle
                     sensor_alert_history['tilt'] = current_time
 
-            if data.get('gunshot') == 1: # Acoustic sensor trip
+            # 3. GUNSHOT
+            if data.get('gunshot') == 1: 
                 if (current_time - sensor_alert_history['gunshot']) > 1:
                     msg_text = f"🔥 *GUNSHOT DETECTED* 🔥\n\n⏱️ *Time:* {datetime.now().strftime('%H:%M:%S')}\n📍 *Unit:* Field Cam 01\n*IMMEDIATE ACTION REQUIRED*"
                     Thread(target=send_telegram_alert, args=(msg_text,)).start()
+                    log_event_to_db("gunshot") # Save to DB
                     sensor_alert_history['gunshot'] = current_time
+            # 4. MANUAL WAKE ACKNOWLEDGMENT
+            if data.get('manual_wake') == 1:
+                log_event_to_db("system", value=1.0) # Logging as a system event
+                print("✅ Received ACK: Camera manually awakened by user.")
 
     except Exception as e:
         print(f"❌ MQTT Error: {e}")
@@ -465,20 +491,55 @@ def handle_amb82_video(video_file, sample_fps=1, min_conf=0.5, country='IND', ro
         video_processor = BatchVideoProcessor(model_manager)
 
     try:
-        detections = video_processor.process_video_batched(
+        # 1. Get the raw, unfiltered detections from the AI
+        raw_detections = video_processor.process_video_batched(
             file_path, batch_size=2, sample_fps=sample_fps, 
             min_confidence=min_conf, country=country, rotate_video=rotate_video
         )
-        if detections:
-            for d in detections:
+        
+        # ==========================================
+        # 🚀 THE "SMART FILTER" PIPELINE
+        # ==========================================
+        CONFIDENCE_THRESHOLD = 0.55
+        TIME_GAP_THRESHOLD = 5
+
+        clean_detections = []
+        last_seen_dict = {}
+
+        # Ensure they are in chronological order
+        raw_detections.sort(key=lambda x: x['timestamp'])
+
+        for d in raw_detections:
+            # Rule 1: Confidence Check
+            if d['confidence'] < CONFIDENCE_THRESHOLD and d['species'] != "ARMED HUMAN": 
+                continue
+            
+            # Rule 2: Spam Prevention (5-second gap per species)
+            last_time = last_seen_dict.get(d['species'], -999)
+            if (d['timestamp'] - last_time) > TIME_GAP_THRESHOLD:
+                clean_detections.append(d)
+                last_seen_dict[d['species']] = d['timestamp']
+
+        # Rule 3: Empty Video Purge (Only save if clean_detections has items)
+        if clean_detections:
+            for d in clean_detections:
                 res = DetectionResult(
                     video_id=new_video.id, species=d['species'], confidence=d['confidence'],
                     timestamp_in_video=d['timestamp'], image_url=d.get('image_url')
                 )
                 db.session.add(res)
+                
         new_video.processed = True
         db.session.commit()
-        return {"success": True, "video_id": new_video.id, "count": len(detections), "results": detections}
+        
+        # Send ONLY the clean data to the UI
+        return {
+            "success": True, 
+            "video_id": new_video.id, 
+            "count": len(clean_detections), 
+            "results": clean_detections
+        }
+        
     except Exception as e:
         print(f"❌ Error: {e}")
         return {"success": False, "error": str(e)}
@@ -571,7 +632,7 @@ def detect():
                     
                     try:
                         # Run Weapon Model on Intel i5
-                        weapon_res = model_manager.weapon_model.infer(img, confidence=0.5)
+                        weapon_res = model_manager.weapon_model.infer(img,confidence=WEAPON_CONFIDENCE_THRESHOLD)
                         
                         # Debug Print 2: See how many weapons the CPU found
                         print(f"🎯 Weapon scan complete. Found {len(weapon_res[0].predictions)} threats.")
@@ -651,34 +712,49 @@ def get_history():
     """Endpoint to fetch past detections for the dashboard."""
     videos = VideoRecord.query.order_by(VideoRecord.upload_time.desc()).all()
     output = []
-    CONFIDENCE_THRESHOLD = 0.55
-    TIME_GAP_THRESHOLD = 5
 
     for v in videos:
-        raw_detections = v.detections
-        raw_detections.sort(key=lambda x: x.timestamp_in_video)
-        clean_detections = []
-        last_seen_dict = {}
-
-        for d in raw_detections:
-            if d.confidence < CONFIDENCE_THRESHOLD: continue
+        # Since we did the "Empty Video Purge" during upload, 
+        # any video with 0 detections in the DB can just be skipped
+        if not v.detections: 
+            continue
             
-            # Condense detections so we don't show 5 pictures of the same deer
-            last_time = last_seen_dict.get(d.species, -999)
-            if (d.timestamp_in_video - last_time) > TIME_GAP_THRESHOLD:
-                clean_detections.append({
-                    "species": d.species, "confidence": d.confidence,
-                    "time": d.timestamp_in_video, "image_url": d.image_url
-                })
-                last_seen_dict[d.species] = d.timestamp_in_video
+        # Sort the already-clean detections chronologically
+        sorted_detections = sorted(v.detections, key=lambda x: x.timestamp_in_video)
+        
+        # Format the data for the UI
+        clean_detections = [{
+            "species": d.species, 
+            "confidence": d.confidence,
+            "time": d.timestamp_in_video, 
+            "image_url": d.image_url
+        } for d in sorted_detections]
 
-        if clean_detections:
-            output.append({
-                "id": v.id, "filename": v.filename, "time": v.upload_time, "detections": clean_detections
-            })
+        output.append({
+            "id": v.id, 
+            "filename": v.filename, 
+            "time": v.upload_time, 
+            "detections": clean_detections
+        })
             
     return jsonify(output)
-
+@app.route('/api/sensor_history')
+def get_sensor_history():
+    """Endpoint to fetch past sensor events for the dashboard log."""
+    try:
+        # Get the 50 most recent events from the database
+        events = SensorEvent.query.order_by(SensorEvent.timestamp.desc()).limit(50).all()
+        output = []
+        for e in events:
+            output.append({
+                "id": e.id,
+                "type": e.event_type,
+                "value": e.value,
+                "timestamp": e.timestamp.isoformat() + "Z" # Format as standard UTC string for JS
+            })
+        return jsonify({"success": True, "events": output})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
 # Static file servers for videos and images
 @app.route('/uploads/videos/<path:filename>')
 def serve_video(filename): return send_from_directory(VIDEO_DIR, filename)
@@ -686,6 +762,20 @@ def serve_video(filename): return send_from_directory(VIDEO_DIR, filename)
 @app.route('/static/detections/<path:filename>')
 def serve_detections(filename): return send_from_directory(DETECTIONS_DIR, filename)
 
+# command sending for esp
+@app.route('/api/command', methods=['POST'])
+def send_command():
+    """Endpoint for the UI to send commands to the ESP32 via MQTT."""
+    try:
+        data = request.json
+        command = data.get('command')
+        if command:
+            # Publish to the exact topic the ESP32 is subscribed to
+            mqtt_client.publish("security/command", command)
+            return jsonify({"success": True, "message": f"Sent {command} to ESP32"})
+        return jsonify({"success": False, "error": "No command provided"}), 400
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
 # ==========================================
 # 6. MAIN SERVER EXECUTION
 # ==========================================
@@ -712,4 +802,4 @@ if __name__ == '__main__':
     print(f"{'='*60}\n")
     
     # 3. Start the Flask web server
-    app.run(host='0.0.0.0', port=5000, debug=False, threaded=True)
+    app.run(host='0.0.0.0', port=5000, debug=False, threaded=False)
