@@ -1,0 +1,23 @@
+# --- Core Compatibility ---
+setuptools<70
+
+# --- Web Server & Database ---
+Flask==3.1.2
+flask-cors==6.0.2
+Flask-SQLAlchemy==3.1.1
+Werkzeug==3.1.5
+
+# --- Image Processing ---
+opencv-python==4.10.0.84
+pillow>=11.0,<12.0
+numpy==2.2.6
+
+# --- AI Models ---
+speciesnet==5.0.3
+inference==1.0.2
+onnxruntime==1.21.1
+
+# --- IoT & Notifications ---
+paho-mqtt==1.6.1
+python-dotenv==1.0.0
+requests==2.32.5
