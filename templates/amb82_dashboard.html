@@ -596,6 +596,7 @@
         }
 
         function openModal(url) {
+            if (!url || url === 'undefined' || url === 'null') return;
             document.getElementById('modalImg').src = url;
             document.getElementById('imageModal').classList.add('active');
         }

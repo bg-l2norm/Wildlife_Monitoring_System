@@ -246,7 +246,7 @@
         }
         .btn-wake:hover { background: #333; transform: translateY(-2px); box-shadow: 0 6px 15px rgba(0,0,0,0.15); }
         .btn-wake:active { transform: translateY(2px) scale(0.95); box-shadow: inset 0 4px 8px rgba(0,0,0,0.4); background: #000; }
-        .btn-wake.loading { background: #666; border-color: #666; pointer-events: none; transform: none; box-shadow: none; }  
+        .btn-wake.loading { background: #666 !important; border-color: #666 !important; pointer-events: none; transform: none; box-shadow: none; }
     </style>
 </head>
 
@@ -565,7 +565,8 @@
                         
                         // Check if the other camera is also clear before resetting the global header
                         const otherNode = nId === "main" ? "node1" : "main";
-                        if (fleetMemory[otherNode].gunshot === 0 && fleetMemory[otherNode].motion === 0 && nodeMem.motion === 0) {
+                        const otherClear = !fleetMemory[otherNode] || (fleetMemory[otherNode].gunshot === 0 && fleetMemory[otherNode].motion === 0);
+                        if (otherClear && nodeMem.motion === 0) {
                             gText.textContent = "System Nominal"; 
                             gText.style.color = '#00e676';
                             globalDot.style.backgroundColor = '#00e676';
