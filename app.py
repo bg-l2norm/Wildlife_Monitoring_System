@@ -24,6 +24,7 @@ from flask import Flask, render_template, request, jsonify, send_from_directory
 from flask_cors import CORS
 from threading import Lock, Thread
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy.orm import joinedload
 from datetime import datetime
 from dotenv import load_dotenv
 # AI Model imports
@@ -41,7 +42,7 @@ ROBOFLOW_API_KEY = os.getenv('ROBOFLOW_API_KEY')
 
 # --- Dynamic Application Settings (Defaults) ---
 APP_CONFIG = {
-    "sensor_cooldown": 5,                # Wait 5 seconds before repeating sensor alerts 
+    "sensor_cooldown": 5,                # Wait 5 seconds before repeating sensor alerts
     "weapon_confidence_threshold": 0.50, # Minimum confidence for weapon detection
     "species_confidence_threshold": 0.55, # Minimum confidence for wildlife in video smart filter
     "time_gap_threshold": 5,          # Spam prevention gap per species in video processing
@@ -61,7 +62,7 @@ CACHE_DIR = os.path.join(BASE_DIR, ".cache")
 DETECTIONS_DIR = os.path.join(BASE_DIR, "static", "detections")
 VIDEO_DIR = os.path.join(BASE_DIR, "uploads", "videos")
 TEMP_DIR = os.path.join(BASE_DIR, "temp_inference", "frames")
-UPLOAD_DIR = os.path.join(BASE_DIR, "uploads") 
+UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
 
 # Tell PyTorch and SpeciesNet to use our custom cache folder
 os.environ["XDG_CACHE_HOME"] = CACHE_DIR
@@ -113,7 +114,7 @@ def send_telegram_alert(message):
         payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown"}
         requests.post(url, data=payload)
         print(f"✅ Telegram sent: {message}")
-    except Exception as e: 
+    except Exception as e:
         print(f"❌ Telegram Error: {e}")
 
 class VideoRecord(db.Model):
@@ -185,13 +186,13 @@ class ModelManager:
             from speciesnet import SpeciesNet
             self.model = SpeciesNet(model_name=MODEL_FOLDER, components='all', geofence=True, multiprocessing=False)
             print("✅ SpeciesNet Loaded Successfully (GPU)")
-            
+
             # 2. Load Weapon Model to CPU
             print("⏳ Loading Custom Weapon Model...")
             weapon_model_path = os.path.join(BASE_DIR, "weapon_model.onnx")
             self.weapon_model = YOLO(weapon_model_path)
             print("✅ Weapon Model Loaded Successfully (CPU)")
-            
+
             self._warmup()
             self.initialized = True
             return True
@@ -212,7 +213,7 @@ class ModelManager:
             print("🔥 Warmup complete")
         except Exception as e:
             print(f"⚠️ Warmup failed: {e}")
-            
+
     def predict(self, filepath):
         """Used for single image uploads via the web interface."""
         if not self.model: return None
@@ -240,51 +241,55 @@ class BatchVideoProcessor:
         fps = cap.get(cv2.CAP_PROP_FPS)
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         if fps == 0: return []
-        
+
         frame_interval = int(max(1, fps / sample_fps)) # How many frames to skip
         paths_buffer, timestamps_buffer, all_detections = [], [], []
-        video_alert_history = {} 
-        
+        video_alert_history = {}
+
         # ⏱️ THE COOLDOWN TRACKER
         # Tracks when the CPU last fired, and if we already sent a Telegram alert for this video
         video_state = {"last_gun_time": -999, "alert_sent": False}
-        
+
         frame_count = 0
         try:
             while cap.isOpened():
-                ret, frame = cap.read()
-                if not ret: break 
-                
                 # Only process 1 frame every second
                 if frame_count % frame_interval == 0:
+                    ret, frame = cap.read()
+                    if not ret: break
+
                     current_time_sec = frame_count / fps
-                    
+
                     # Optional: Rotate video if AMB82 is mounted sideways
                     # Optional: Rotate video if AMB82 is mounted sideways
                     if rotate_video:
                         frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
-                    
+
                     # Save frame temporarily for AI to read
                     frame_path = os.path.join(TEMP_DIR, f"frame_{uuid.uuid4().hex}.jpg")
                     cv2.imwrite(frame_path, frame)
-                    
+
                     paths_buffer.append(frame_path)
                     timestamps_buffer.append(current_time_sec)
-                    
+
                     # When buffer is full (2 frames), send to AI
                     if len(paths_buffer) >= batch_size:
                         batch_detections = self._process_batch(
                             paths_buffer, timestamps_buffer, country, min_confidence, video_alert_history, video_state
                         )
                         all_detections.extend(batch_detections)
-                        
+
                         # Clean up temp frames to save hard drive space
                         for p in paths_buffer:
                             if os.path.exists(p): os.remove(p)
                         paths_buffer, timestamps_buffer = [], []
                         print(f"⏳ Progress: {frame_count/total_frames:.1%}")
+                else:
+                    ret = cap.grab()
+                    if not ret: break
+
                 frame_count += 1
-                
+
             # Process any remaining frames at the end of the video
             if paths_buffer:
                 batch_detections = self._process_batch(
@@ -295,7 +300,7 @@ class BatchVideoProcessor:
                     if os.path.exists(p): os.remove(p)
         finally:
             cap.release()
-            
+
         print(f"✅ Video complete. Found {len(all_detections)} detections.")
         return all_detections
 
@@ -303,12 +308,12 @@ class BatchVideoProcessor:
         if not self.model_manager.model: return []
         try:
             path_to_time = {fp: ts for fp, ts in zip(filepaths, timestamps)}
-            
+
             # --- STAGE 1: SPECIESNET (GPU) ---
             result = self.model_manager.model.predict(filepaths=filepaths, country=country, batch_size=len(filepaths))
             valid_detections = []
             predictions = result.get('predictions', {})
-            
+
             # Formatting magic to handle SpeciesNet output
             if isinstance(predictions, list):
                 iterator = zip(filepaths, predictions)
@@ -317,24 +322,24 @@ class BatchVideoProcessor:
                 iterator = predictions.items()
                 is_dict = True
             else: return []
-            
+
             for item in iterator:
                 path_key, pred_data = item if not is_dict else item
                 if not pred_data: continue
                 class_data = pred_data.get("classifications", {})
                 if not class_data: continue
-                
+
                 top_score = class_data.get("scores", [0])[0]
                 if top_score >= min_confidence:
                     top_class = class_data.get("classes", ["Unknown"])[0]
-                    
+
                     # Clean up scientific name (e.g. "Panthera tigris; Tiger" -> "Tiger")
                     if ";" in top_class:
                         parts = [p.strip() for p in top_class.split(";") if p.strip()]
                         common_name = parts[-1].title()
                     else:
                         common_name = top_class.title()
-                        
+
                     time_sec = path_to_time.get(path_key, 0)
                     unique_name = f"det_{uuid.uuid4().hex[:8]}.jpg"
                     save_path = os.path.join(DETECTIONS_DIR, unique_name)
@@ -349,43 +354,43 @@ class BatchVideoProcessor:
                         if img is not None:
                             # 🚀 PERFORMANCE FIX: Resize the image BEFORE making the CPU think
                             h, w = img.shape[:2]
-                            
+
                             if w > 640:
                                 scale = 640 / w
                                 img = cv2.resize(img, (640, int(h * scale)))
-                                
+
                             # --- STAGE 2: WEAPON DETECTION (CPU) ---
-                            
+
                             if common_name.lower() == "human" and (time_sec - video_state["last_gun_time"]) > 3.0:
                                 print(f"👤 Human spotted at {time_sec:.1f}s. Running Weapon Scan on CPU...")
-                                
+
                                 # Run YOLO inference explicitly on CPU
                                 weapon_res = self.model_manager.weapon_model.predict(
-                                    source=img, 
-                                    conf=APP_CONFIG["weapon_confidence_threshold"], 
-                                    device="cpu", 
+                                    source=img,
+                                    conf=APP_CONFIG["weapon_confidence_threshold"],
+                                    device="cpu",
                                     verbose=False
                                 )
                                 boxes = weapon_res[0].boxes
-                                
+
                                 # If weapon found...
                                 if len(boxes) > 0:
                                     print("🚨 LETHAL WEAPON DETECTED!")
-                                    video_state["last_gun_time"] = time_sec 
+                                    video_state["last_gun_time"] = time_sec
                                     is_weapon_threat = True
                                     weapon_conf = float(boxes.conf[0]) # Confidence of top detection
-                                    
+
                                     # Draw Red Bounding Boxes on the image
                                     for box in boxes:
                                         x1, y1, x2, y2 = map(int, box.xyxy[0])
                                         conf = float(box.conf[0])
                                         cls_id = int(box.cls[0])
                                         class_name = weapon_res[0].names[cls_id]
-                                        
+
                                         label = f"{class_name} {conf:.2f}"
                                         cv2.rectangle(img, (x1, y1), (x2, y2), (0, 0, 255), 2) # Red Box
                                         cv2.putText(img, label, (x1, max(y1 - 10, 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
-                                
+
                                     # Send Telegram Alert (ONLY ONCE per video to prevent spam)
                                     if not video_state["alert_sent"]:
                                         # Pulling the main location from APP_CONFIG 👇
@@ -393,20 +398,20 @@ class BatchVideoProcessor:
                                         msg = f"🚨 *LETHAL WEAPON DETECTED* 🚨\n\n🎯 *Threat:* Armed Human\n⏱️ *Video Time:* {int(time_sec)}s\n📍 *Unit:* Main Camera\n🌍 *Location:* {cam_location}"
                                         Thread(target=send_telegram_alert, args=(msg,)).start()
                                         video_state["alert_sent"] = True
-                            
+
                             # Save final image to static folder
                             cv2.imwrite(save_path, img)
                             image_url = f"/static/detections/{unique_name}"
-                            
+
                             # Standard Wildlife Telegram Alert (Ignores humans and empty frames)
-                            excluded_categories = ["human", "blank", "unknown", "none"]       
+                            excluded_categories = ["human", "blank", "unknown", "none"]
                             if top_score > 0.75 and not is_weapon_threat and common_name.lower() not in excluded_categories:
                                 last_alert = alert_history.get(common_name, -999)
                                 if (time_sec - last_alert) > 30: # Don't spam if a monkey sits in front of camera
                                     msg = f"🐾 *WILDLIFE SIGHTING*\n\n🦁 *Species:* {common_name}\n🎯 *Confidence:* {top_score:.1%}\n⏱️ *Video Time:* {int(time_sec)}s"
                                     Thread(target=send_telegram_alert, args=(msg,)).start()
                                     alert_history[common_name] = time_sec
-                                    
+
                     # Log the original SpeciesNet detection to the database (excluding blanks)
                     # If it's a human WITH a weapon, completely override the normal human log
                     if is_weapon_threat:
@@ -488,7 +493,7 @@ def on_mqtt_message(client, userdata, msg):
     try:
         payload = msg.payload.decode('utf-8')
         data = json.loads(payload)
-        
+
         if msg_type == "events":
             print(f"📨 {node_id.upper()} Event: {data}")
         elif msg_type == "heartbeat":
@@ -498,7 +503,7 @@ def on_mqtt_message(client, userdata, msg):
         for k in node["status"]:
             if k in data:
                 node["status"][k] = data[k]
-                if k == "gunshot" and data[k] == 1: 
+                if k == "gunshot" and data[k] == 1:
                     node["gunshot_timestamp"] = current_time
 
         # Broadcast to WebSockets (Includes the node_id so UI knows which card to update)
@@ -514,43 +519,43 @@ def on_mqtt_message(client, userdata, msg):
 
         # Process Sensor Alerts
         if msg_type == "events":
-            
+
            # 1. MOTION
             if data.get('motion') == 1:
                 if (current_time - node["alert_history"]['motion']) > APP_CONFIG["sensor_cooldown"]:
                     # Added Location here 👇
                     msg_text = f"🏃 *MOTION DETECTED* 🏃\n\n⏱️ *Time:* {datetime.now().strftime('%H:%M:%S')}\n📍 *Unit:* {node_id.upper()}\n🌍 *Location:* {node['location']}"
                     Thread(target=send_telegram_alert, args=(msg_text,)).start()
-                    log_event_to_db("motion") 
+                    log_event_to_db("motion")
                     node["alert_history"]['motion'] = current_time
-                    
+
                     # ==========================================
                     # 🚀 NEW: CROSS-NODE TRIGGER LOGIC
                     # ==========================================
                     if node_id == "node1" and APP_CONFIG["node1_triggers_main"] == True:
                         print("🔗 Link Trigger: Node 1 detected motion, sending command to MAIN unit.")
-                        
+
                         # Change the payload below to whatever string/JSON your main ESP32 expects
-                        payload = "wake" 
+                        payload = "wake"
                         client.publish("security/main/command", payload)
 
             # 2. TILT
             tilt_val = data.get('tilt', 0.0)
-            if tilt_val > 30: 
+            if tilt_val > 30:
                 if (current_time - node["alert_history"]['tilt']) > APP_CONFIG["sensor_cooldown"]:
                     # Added Location here 👇
                     msg_text = f"⚠️ *DEVICE TILT WARNING* ⚠️\n\n📉 *Angle:* {tilt_val}°\n📍 *Unit:* {node_id.upper()}\n🌍 *Location:* {node['location']}"
                     Thread(target=send_telegram_alert, args=(msg_text,)).start()
-                    log_event_to_db("tilt", tilt_val) 
+                    log_event_to_db("tilt", tilt_val)
                     node["alert_history"]['tilt'] = current_time
 
             # 3. GUNSHOT
-            if data.get('gunshot') == 1: 
+            if data.get('gunshot') == 1:
                 if (current_time - node["alert_history"]['gunshot']) > 1:
                     # Added Location here 👇
                     msg_text = f"🔥 *GUNSHOT DETECTED* 🔥\n\n⏱️ *Time:* {datetime.now().strftime('%H:%M:%S')}\n📍 *Unit:* {node_id.upper()}\n🌍 *Location:* {node['location']}\n*IMMEDIATE ACTION REQUIRED*"
                     Thread(target=send_telegram_alert, args=(msg_text,)).start()
-                    log_event_to_db("gunshot") 
+                    log_event_to_db("gunshot")
                     node["alert_history"]['gunshot'] = current_time
                     # ==========================================
                     # 🚀 NEW: CROSS-NODE TRIGGER LOGIC (GUNSHOT)
@@ -558,8 +563,8 @@ def on_mqtt_message(client, userdata, msg):
                     # If node 1 hears a gunshot, and the feature is enabled in settings, wake MAIN
                     if node_id == "node1" and APP_CONFIG.get("node1_triggers_main") == True:
                         print("🔗 Link Trigger: Node 1 detected a GUNSHOT! Waking up MAIN unit.")
-                        
-                        payload = "wake" 
+
+                        payload = "wake"
                         client.publish("security/main/command", payload)
 
             # 4. MANUAL WAKEcls
@@ -590,16 +595,16 @@ def handle_amb82_video(video_file, sample_fps=1, min_conf=0.5, country='IND', ro
     try:
         # 1. Get the raw, unfiltered detections from the AI
         raw_detections = video_processor.process_video_batched(
-            file_path, batch_size=2, sample_fps=sample_fps, 
+            file_path, batch_size=2, sample_fps=sample_fps,
             min_confidence=min_conf, country=country, rotate_video=rotate_video
         )
-        
+
         # ==========================================
         # 🚀 THE "SMART FILTER" PIPELINE
         # ==========================================
         CONFIDENCE_THRESHOLD = APP_CONFIG["species_confidence_threshold"]
         TIME_GAP_THRESHOLD = APP_CONFIG["time_gap_threshold"]
-        
+
         clean_detections = []
         last_seen_dict = {}
 
@@ -608,9 +613,9 @@ def handle_amb82_video(video_file, sample_fps=1, min_conf=0.5, country='IND', ro
 
         for d in raw_detections:
             # Rule 1: Confidence Check
-            if d['confidence'] < CONFIDENCE_THRESHOLD and d['species'] != "ARMED HUMAN": 
+            if d['confidence'] < CONFIDENCE_THRESHOLD and d['species'] != "ARMED HUMAN":
                 continue
-            
+
             # Rule 2: Spam Prevention (5-second gap per species)
             last_time = last_seen_dict.get(d['species'], -999)
             if (d['timestamp'] - last_time) > TIME_GAP_THRESHOLD:
@@ -625,18 +630,18 @@ def handle_amb82_video(video_file, sample_fps=1, min_conf=0.5, country='IND', ro
                     timestamp_in_video=d['timestamp'], image_url=d.get('image_url')
                 )
                 db.session.add(res)
-                
+
         new_video.processed = True
         db.session.commit()
-        
+
         # Send ONLY the clean data to the UI
         return {
-            "success": True, 
-            "video_id": new_video.id, 
-            "count": len(clean_detections), 
+            "success": True,
+            "video_id": new_video.id,
+            "count": len(clean_detections),
             "results": clean_detections
         }
-        
+
     except Exception as e:
         print(f"❌ Error: {e}")
         return {"success": False, "error": str(e)}
@@ -664,12 +669,12 @@ def detect():
         data = request.json
         img_data = data.get('image')
         if not img_data: return jsonify(success=False, error="No image data"), 400
-        
+
         if "," in img_data: _, encoded = img_data.split(",", 1)
         else: encoded = img_data
         try: binary = base64.b64decode(encoded)
         except Exception: return jsonify(success=False, error="Invalid image encoding"), 400
-        
+
         filename = f"upload_{uuid.uuid4().hex}.jpg"
         filepath = os.path.join(UPLOAD_DIR, filename)
         with open(filepath, "wb") as f: f.write(binary)
@@ -681,22 +686,22 @@ def detect():
 
         if model_manager.model:
             result = model_manager.predict(filepath)
-            
+
             # 1. Read the image into OpenCV BEFORE deleting the temp file
             img = cv2.imread(filepath)
             if os.path.exists(filepath): os.remove(filepath)
-            
+
             if result:
                 predictions = result.get('predictions', {})
-                if not predictions: 
+                if not predictions:
                     return jsonify(success=True, species="None", scientific_name="N/A", confidence=0.0)
-                
+
                 if isinstance(predictions, list): pred_data = predictions[0]
                 elif isinstance(predictions, dict): pred_data = next(iter(predictions.values()))
                 else: return jsonify(success=False, error="Unknown prediction format"), 500
-                
+
                 class_data = pred_data.get("classifications", {})
-                if not class_data: 
+                if not class_data:
                     return jsonify(success=True, species="None", scientific_name="N/A", confidence=0.0)
 
                 top_class = class_data.get("classes", ["Unknown"])[0]
@@ -713,45 +718,45 @@ def detect():
               # ==========================================
                 # 🚀 NEW: WEAPON DETECTION FOR SINGLE IMAGES
                 # ==========================================
-                
+
                 # Debug Print 1: See what SpeciesNet actually returned
                 print(f"\n📸 UI UPLOAD SCANNED: GPU thinks it is a '{species}' (Conf: {top_score:.2f})")
-                
+
                 processed_b64 = None
-                
+
                 # Make the check more forgiving
                 is_human = "human" in species.lower() or "person" in species.lower()
 
                 if is_human and img is not None:
                     print("👤 Human detected! Routing image to Intel i5 CPU for Weapon Scan...")
-                    
+
                     # Resize for CPU speed
                     h, w = img.shape[:2]
                     if w > 640:
                         scale = 640 / w
                         img = cv2.resize(img, (640, int(h * scale)))
-                    
+
                     try:
                         # 1. Run YOLO Weapon Model explicitly on CPU
                         weapon_res = model_manager.weapon_model.predict(
-                            source=img, 
-                            conf=APP_CONFIG["weapon_confidence_threshold"], 
-                            device="cpu", 
+                            source=img,
+                            conf=APP_CONFIG["weapon_confidence_threshold"],
+                            device="cpu",
                             verbose=False
                         )
-                        
+
                         # YOLO stores detections inside the 'boxes' attribute
                         boxes = weapon_res[0].boxes
-                        
+
                         # Debug Print 2: See how many weapons the CPU found
                         print(f"🎯 Weapon scan complete. Found {len(boxes)} threats.")
-                        
+
                         if len(boxes) > 0:
                             print("🚨 LETHAL WEAPON DETECTED in UI upload! Drawing boxes...")
                             species = "ARMED HUMAN"
                             scientific = "Lethal Threat Detected"
                             top_score = float(boxes.conf[0]) # Confidence of the highest scoring box
-                            
+
                             # Draw Red Bounding Boxes
                             for box in boxes:
                                 # YOLO gives us the exact corner coordinates right out of the box
@@ -759,27 +764,27 @@ def detect():
                                 conf = float(box.conf[0])
                                 cls_id = int(box.cls[0])
                                 class_name = weapon_res[0].names[cls_id]
-                                
+
                                 label = f"{class_name} {conf:.2f}"
                                 cv2.rectangle(img, (x1, y1), (x2, y2), (0, 0, 255), 2)
                                 cv2.putText(img, label, (x1, max(y1 - 10, 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
-                            
+
                             # Convert the drawn image back to base64
                             _, buffer = cv2.imencode('.jpg', img)
                             processed_b64 = "data:image/jpeg;base64," + base64.b64encode(buffer).decode('utf-8')
-                            
+
                     except Exception as e:
                         print(f"❌ CPU Weapon Model Error: {e}")
-                        
+
                 elif is_human and img is None:
                     print("❌ ERROR: SpeciesNet saw a human, but OpenCV failed to read the image file.")
 
                 return jsonify({
-                    "success": True, 
-                    "species": species, 
-                    "scientific_name": scientific, 
+                    "success": True,
+                    "species": species,
+                    "scientific_name": scientific,
                     "confidence": float(top_score),
-                    "processed_image": processed_b64 
+                    "processed_image": processed_b64
                 })
             else:
                 return jsonify(success=False, error="Inference failed."), 500
@@ -801,7 +806,7 @@ def handle_connect(auth=None): # Added auth=None to fix the TypeError
     global fleet_state
     t = time.time()
     print("🟢 Web client connected to real-time dashboard.")
-    
+
     # Loop through all known cameras and send their latest state to the UI
     for node_id, node in fleet_state.items():
         socketio.emit('sensor_update', {
@@ -822,49 +827,49 @@ def upload_video():
     if 'video' not in request.files: return jsonify(success=False), 400
     video_file = request.files['video']
     if video_file.filename == '': return jsonify(success=False), 400
-    
+
     country = request.form.get('country', 'IND')
     response_mode = request.args.get('mode', 'simple')
-    
+
     # Check if the request came from the UI to disable rotation
     source = request.form.get('source', 'amb82')
     should_rotate = True if source == 'amb82' else False
-    
+
     full_data = handle_amb82_video(video_file, country=country, rotate_video=should_rotate)
-    
+
     if response_mode == 'simple': return jsonify({"success": True, "status": "Ack", "id": full_data.get('video_id')}), 200
     else: return jsonify(full_data), 200
 
 @app.route('/api/history')
 def get_history():
     """Endpoint to fetch past detections for the dashboard."""
-    videos = VideoRecord.query.order_by(VideoRecord.upload_time.desc()).all()
+    videos = VideoRecord.query.options(joinedload(VideoRecord.detections)).order_by(VideoRecord.upload_time.desc()).all()
     output = []
 
     for v in videos:
-        # Since we did the "Empty Video Purge" during upload, 
+        # Since we did the "Empty Video Purge" during upload,
         # any video with 0 detections in the DB can just be skipped
-        if not v.detections: 
+        if not v.detections:
             continue
-            
+
         # Sort the already-clean detections chronologically
         sorted_detections = sorted(v.detections, key=lambda x: x.timestamp_in_video)
-        
+
         # Format the data for the UI
         clean_detections = [{
-            "species": d.species, 
+            "species": d.species,
             "confidence": d.confidence,
-            "time": d.timestamp_in_video, 
+            "time": d.timestamp_in_video,
             "image_url": d.image_url
         } for d in sorted_detections]
 
         output.append({
-            "id": v.id, 
-            "filename": v.filename, 
-            "time": v.upload_time, 
+            "id": v.id,
+            "filename": v.filename,
+            "time": v.upload_time,
             "detections": clean_detections
         })
-            
+
     return jsonify(output)
 @app.route('/api/sensor_history')
 def get_sensor_history():
@@ -923,7 +928,7 @@ def update_settings():
             if key in APP_CONFIG:
                 # Ensure we maintain the correct data type (float, int, bool, or str)
                 if isinstance(APP_CONFIG[key], bool):
-                    APP_CONFIG[key] = bool(value) 
+                    APP_CONFIG[key] = bool(value)
                 elif isinstance(APP_CONFIG[key], float):
                     APP_CONFIG[key] = float(value)
                 elif isinstance(APP_CONFIG[key], int):
@@ -936,9 +941,9 @@ def update_settings():
                 # ==========================================
                 if key.startswith("location_"):
                     # Extract the node_id (e.g., "location_main" becomes "main")
-                    node_id = key.replace("location_", "") 
+                    node_id = key.replace("location_", "")
                     new_location = str(value).strip()
-                    
+
                     # 1. Update SQLite Database permanently
                     config = NodeConfig.query.filter_by(node_id=node_id).first()
                     if not config:
@@ -947,36 +952,36 @@ def update_settings():
                     else:
                         config.location = new_location
                     db.session.commit()
-                    
+
                     # 2. Update Active Memory for instant WebSocket broadcast
                     if node_id in fleet_state:
                         fleet_state[node_id]["location"] = new_location
-                        
+
                     print(f"📍 Database Updated: {node_id.upper()} location saved as '{new_location}'")
 
         print(f"⚙️ Settings updated via API: {APP_CONFIG}")
         return jsonify({"success": True, "settings": APP_CONFIG})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
-    
+
 # --- ESP32 WATCHDOG MONITOR ---
 def watchdog_monitor():
     """Continuously checks if any ESP32 timed out and forces the UI offline if it did."""
     global fleet_state
-    
+
     while True:
         time.sleep(5) # Wake up and check every 5 seconds
         current_time = time.time()
-        
+
         # Check every camera in our memory
         for node_id, node in list(fleet_state.items()):
             is_online = (current_time - node["last_seen"]) < APP_CONFIG["esp_timeout"] and node["last_seen"] != 0
-            
+
             # If the state changed (it just went offline, or just came back online)
             if is_online != node["esp_online"]:
                 node["esp_online"] = is_online
                 print(f"📡 Watchdog: {node_id.upper()} is now {'ONLINE' if is_online else 'OFFLINE'}")
-                
+
                 try:
                     with app.app_context():
                         socketio.emit('sensor_update', {
@@ -995,7 +1000,7 @@ def watchdog_monitor():
 
 if __name__ == '__main__':
     print("\n🚀 STARTING WILDLIFE SERVER (LOCAL ONLY) 🚀\n")
-    
+
     # 1. Boot up the heavy AI models before opening the server
     model_manager.initialize()
 
@@ -1003,10 +1008,10 @@ if __name__ == '__main__':
     mqtt_client = mqtt.Client()
     mqtt_client.on_connect = on_mqtt_connect
     mqtt_client.on_message = on_mqtt_message
-    
+
     try:
         mqtt_client.connect("127.0.0.1", 1883, 60)
-        mqtt_client.loop_start() 
+        mqtt_client.loop_start()
     except Exception as e:
         print(f"⚠️ Could not connect to MQTT Broker. Is Mosquitto running? Error: {e}")
 # Start the Watchdog Monitor in the background
