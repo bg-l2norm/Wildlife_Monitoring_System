@@ -971,10 +971,20 @@ video { width: 100%; display: block; max-height: 500px; }
         const player = document.getElementById('mainPlayer');
         player.currentTime = seconds;
         player.play();
+        player.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
+
+    let wasVideoPlaying = false;
 
     function openModal(imgUrl) {
         if (!imgUrl || imgUrl === 'undefined' || imgUrl === 'null') return;
+        const player = document.getElementById('mainPlayer');
+        if (player) {
+            wasVideoPlaying = !player.paused;
+            if (wasVideoPlaying) {
+                player.pause();
+            }
+        }
         const modal = document.getElementById('imageModal');
         document.getElementById('modalImg').src = imgUrl;
         modal.classList.add('active');
@@ -984,6 +994,10 @@ video { width: 100%; display: block; max-height: 500px; }
     function closeModal() {
         document.getElementById('imageModal').classList.remove('active');
         document.body.style.overflow = "auto";
+        const player = document.getElementById('mainPlayer');
+        if (player && wasVideoPlaying) {
+            player.play();
+        }
     }
 
     function formatTime(seconds) {

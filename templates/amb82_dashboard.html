@@ -498,6 +498,7 @@
 
             document.getElementById('welcomeState').style.display = 'none';
             document.getElementById('videoContent').style.display = 'block';
+            document.getElementById('videoContent').scrollIntoView({ behavior: 'smooth', block: 'start' });
 
             document.getElementById('displayTitle').textContent = `Capture #${data.id}`;
             const dateObj = new Date(data.time);
@@ -583,6 +584,7 @@
             const player = document.getElementById('mainPlayer');
             player.currentTime = seconds;
             player.play();
+            player.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }
 
         function formatTime(seconds) {
@@ -591,14 +593,29 @@
             return `${m}:${s.toString().padStart(2, '0')}`;
         }
 
+        let wasVideoPlaying = false;
+
         function openModal(url) {
             if (!url || url === 'undefined' || url === 'null') return;
+            const player = document.getElementById('mainPlayer');
+            if (player) {
+                wasVideoPlaying = !player.paused;
+                if (wasVideoPlaying) {
+                    player.pause();
+                }
+            }
             document.getElementById('modalImg').src = url;
             document.getElementById('imageModal').classList.add('active');
+            document.body.style.overflow = "hidden";
         }
         
         function closeModal() {
             document.getElementById('imageModal').classList.remove('active');
+            document.body.style.overflow = "auto";
+            const player = document.getElementById('mainPlayer');
+            if (player && wasVideoPlaying) {
+                player.play();
+            }
         }
 
         // Init
