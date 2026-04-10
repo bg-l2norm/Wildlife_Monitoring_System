@@ -112,7 +112,7 @@ def send_telegram_alert(message):
     try:
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
         payload = {"chat_id": TELEGRAM_CHAT_ID, "text": message, "parse_mode": "Markdown"}
-        requests.post(url, data=payload)
+        requests.post(url, data=payload, timeout=10)
         print(f"✅ Telegram sent: {message}")
     except Exception as e:
         print(f"❌ Telegram Error: {e}")
@@ -283,7 +283,7 @@ class BatchVideoProcessor:
                         for p in paths_buffer:
                             if os.path.exists(p): os.remove(p)
                         paths_buffer, timestamps_buffer = [], []
-                        print(f"⏳ Progress: {frame_count/total_frames:.1%}")
+                        print(f"⏳ Progress: {frame_count/max(1, total_frames):.1%}")
                 else:
                     ret = cap.grab()
                     if not ret: break
@@ -299,6 +299,8 @@ class BatchVideoProcessor:
                 for p in paths_buffer:
                     if os.path.exists(p): os.remove(p)
         finally:
+            for p in paths_buffer:
+                if os.path.exists(p): os.remove(p)
             cap.release()
 
         print(f"✅ Video complete. Found {len(all_detections)} detections.")
@@ -348,69 +350,69 @@ class BatchVideoProcessor:
                     weapon_conf = 0.0
 
                     # Read original image to draw boxes and resize
-                    # Read original image to draw boxes and resize
-                    if os.path.exists(path_key):
-                        img = cv2.imread(path_key)
-                        if img is not None:
-                            # 🚀 PERFORMANCE FIX: Resize the image BEFORE making the CPU think
-                            h, w = img.shape[:2]
+                    if common_name.lower() not in ["blank", "unknown", "none"]:
+                        if os.path.exists(path_key):
+                            img = cv2.imread(path_key)
+                            if img is not None:
+                                # 🚀 PERFORMANCE FIX: Resize the image BEFORE making the CPU think
+                                h, w = img.shape[:2]
 
-                            if w > 640:
-                                scale = 640 / w
-                                img = cv2.resize(img, (640, int(h * scale)))
+                                if w > 640:
+                                    scale = 640 / w
+                                    img = cv2.resize(img, (640, int(h * scale)))
 
-                            # --- STAGE 2: WEAPON DETECTION (CPU) ---
+                                # --- STAGE 2: WEAPON DETECTION (CPU) ---
 
-                            if common_name.lower() == "human" and (time_sec - video_state["last_gun_time"]) > 3.0:
-                                print(f"👤 Human spotted at {time_sec:.1f}s. Running Weapon Scan on CPU...")
+                                if common_name.lower() == "human" and (time_sec - video_state["last_gun_time"]) > 3.0:
+                                    print(f"👤 Human spotted at {time_sec:.1f}s. Running Weapon Scan on CPU...")
 
-                                # Run YOLO inference explicitly on CPU
-                                weapon_res = self.model_manager.weapon_model.predict(
-                                    source=img,
-                                    conf=APP_CONFIG["weapon_confidence_threshold"],
-                                    device="cpu",
-                                    verbose=False
-                                )
-                                boxes = weapon_res[0].boxes
+                                    # Run YOLO inference explicitly on CPU
+                                    weapon_res = self.model_manager.weapon_model.predict(
+                                        source=img,
+                                        conf=APP_CONFIG["weapon_confidence_threshold"],
+                                        device="cpu",
+                                        verbose=False
+                                    )
+                                    boxes = weapon_res[0].boxes
 
-                                # If weapon found...
-                                if len(boxes) > 0:
-                                    print("🚨 LETHAL WEAPON DETECTED!")
-                                    video_state["last_gun_time"] = time_sec
-                                    is_weapon_threat = True
-                                    weapon_conf = float(boxes.conf[0]) # Confidence of top detection
+                                    # If weapon found...
+                                    if len(boxes) > 0:
+                                        print("🚨 LETHAL WEAPON DETECTED!")
+                                        video_state["last_gun_time"] = time_sec
+                                        is_weapon_threat = True
+                                        weapon_conf = float(boxes.conf[0]) # Confidence of top detection
 
-                                    # Draw Red Bounding Boxes on the image
-                                    for box in boxes:
-                                        x1, y1, x2, y2 = map(int, box.xyxy[0])
-                                        conf = float(box.conf[0])
-                                        cls_id = int(box.cls[0])
-                                        class_name = weapon_res[0].names[cls_id]
+                                        # Draw Red Bounding Boxes on the image
+                                        for box in boxes:
+                                            x1, y1, x2, y2 = map(int, box.xyxy[0])
+                                            conf = float(box.conf[0])
+                                            cls_id = int(box.cls[0])
+                                            class_name = weapon_res[0].names[cls_id]
 
-                                        label = f"{class_name} {conf:.2f}"
-                                        cv2.rectangle(img, (x1, y1), (x2, y2), (0, 0, 255), 2) # Red Box
-                                        cv2.putText(img, label, (x1, max(y1 - 10, 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                                            label = f"{class_name} {conf:.2f}"
+                                            cv2.rectangle(img, (x1, y1), (x2, y2), (0, 0, 255), 2) # Red Box
+                                            cv2.putText(img, label, (x1, max(y1 - 10, 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
 
-                                    # Send Telegram Alert (ONLY ONCE per video to prevent spam)
-                                    if not video_state["alert_sent"]:
-                                        # Pulling the main location from APP_CONFIG 👇
-                                        cam_location = APP_CONFIG.get("location_main", "Unknown")
-                                        msg = f"🚨 *LETHAL WEAPON DETECTED* 🚨\n\n🎯 *Threat:* Armed Human\n⏱️ *Video Time:* {int(time_sec)}s\n📍 *Unit:* Main Camera\n🌍 *Location:* {cam_location}"
+                                        # Send Telegram Alert (ONLY ONCE per video to prevent spam)
+                                        if not video_state["alert_sent"]:
+                                            # Pulling the main location from APP_CONFIG 👇
+                                            cam_location = APP_CONFIG.get("location_main", "Unknown")
+                                            msg = f"🚨 *LETHAL WEAPON DETECTED* 🚨\n\n🎯 *Threat:* Armed Human\n⏱️ *Video Time:* {int(time_sec)}s\n📍 *Unit:* Main Camera\n🌍 *Location:* {cam_location}"
+                                            Thread(target=send_telegram_alert, args=(msg,)).start()
+                                            video_state["alert_sent"] = True
+
+                                # Save final image to static folder
+                                cv2.imwrite(save_path, img)
+                                image_url = f"/static/detections/{unique_name}"
+
+                                # Standard Wildlife Telegram Alert (Ignores humans and empty frames)
+                                excluded_categories = ["human", "blank", "unknown", "none"]
+                                if top_score > 0.75 and not is_weapon_threat and common_name.lower() not in excluded_categories:
+                                    last_alert = alert_history.get(common_name, -999)
+                                    if (time_sec - last_alert) > 30: # Don't spam if a monkey sits in front of camera
+                                        msg = f"🐾 *WILDLIFE SIGHTING*\n\n🦁 *Species:* {common_name}\n🎯 *Confidence:* {top_score:.1%}\n⏱️ *Video Time:* {int(time_sec)}s"
                                         Thread(target=send_telegram_alert, args=(msg,)).start()
-                                        video_state["alert_sent"] = True
-
-                            # Save final image to static folder
-                            cv2.imwrite(save_path, img)
-                            image_url = f"/static/detections/{unique_name}"
-
-                            # Standard Wildlife Telegram Alert (Ignores humans and empty frames)
-                            excluded_categories = ["human", "blank", "unknown", "none"]
-                            if top_score > 0.75 and not is_weapon_threat and common_name.lower() not in excluded_categories:
-                                last_alert = alert_history.get(common_name, -999)
-                                if (time_sec - last_alert) > 30: # Don't spam if a monkey sits in front of camera
-                                    msg = f"🐾 *WILDLIFE SIGHTING*\n\n🦁 *Species:* {common_name}\n🎯 *Confidence:* {top_score:.1%}\n⏱️ *Video Time:* {int(time_sec)}s"
-                                    Thread(target=send_telegram_alert, args=(msg,)).start()
-                                    alert_history[common_name] = time_sec
+                                        alert_history[common_name] = time_sec
 
                     # Log the original SpeciesNet detection to the database (excluding blanks)
                     # If it's a human WITH a weapon, completely override the normal human log
@@ -666,7 +668,7 @@ def settings(): return render_template('settings.html')
 def detect():
     """Handles single image uploads from the web interface."""
     try:
-        data = request.json
+        data = request.get_json(silent=True) or {}
         img_data = data.get('image')
         if not img_data: return jsonify(success=False, error="No image data"), 400
 
@@ -843,7 +845,7 @@ def upload_video():
 @app.route('/api/history')
 def get_history():
     """Endpoint to fetch past detections for the dashboard."""
-    videos = VideoRecord.query.options(joinedload(VideoRecord.detections)).order_by(VideoRecord.upload_time.desc()).all()
+    videos = VideoRecord.query.options(joinedload(VideoRecord.detections)).order_by(VideoRecord.upload_time.desc()).limit(50).all()
     output = []
 
     for v in videos:
@@ -900,7 +902,7 @@ def serve_detections(filename): return send_from_directory(DETECTIONS_DIR, filen
 def send_command():
     """Endpoint for the UI to send commands to the ESP32 via MQTT."""
     try:
-        data = request.json
+        data = request.get_json(silent=True) or {}
         command = data.get('command')
         if command:
             # Publish to the exact topic the ESP32 is subscribed to
@@ -919,7 +921,7 @@ def get_settings():
 def update_settings():
     """Allows the frontend to update the dynamic settings and node locations."""
     try:
-        data = request.json
+        data = request.get_json(silent=True) or {}
         if not data:
             return jsonify({"success": False, "error": "No data provided"}), 400
 
