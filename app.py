@@ -790,6 +790,8 @@ def detect():
                 })
             else:
                 return jsonify(success=False, error="Inference failed."), 500
+        else:
+            return jsonify(success=False, error="Model not loaded"), 500
     except Exception as e:
         import traceback
         traceback.print_exc()
