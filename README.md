@@ -23,6 +23,23 @@ allow_anonymous true)*
 
 ## 2. Project Setup
 
+### Quick Setup (Recommended)
+
+You can use the provided setup script to automatically create your virtual environment, install dependencies, and run diagnostic checks:
+
+```bash
+# On Linux/macOS
+./setup.sh
+
+# On Windows (Git Bash or similar)
+bash setup.sh
+```
+
+*(Note: Once installed, you will still need to run `source venv/bin/activate` or `.\venv\Scripts\activate` every time you open a new terminal to work on this project).*
+
+<details>
+<summary><b>Manual Setup (Click to expand)</b></summary>
+
 ### Set Up the Virtual Environment
 
 Keep your dependencies isolated by creating a virtual environment:
@@ -33,10 +50,7 @@ py -3.10 -m venv venv
 
 ```
 
-*(Note: You must run `.\venv\Scripts\activate` every time you open a new terminal to work on this project).*
-
 ### Install `requirements.txt` and CUDA 11.8
-
 
 NVIDIA GPU (CUDA 11.8)
 ```powershell
@@ -48,6 +62,7 @@ Install everything by running:
 ```powershell
 pip install -r requirements.txt
 ```
+</details>
 
 ---
 

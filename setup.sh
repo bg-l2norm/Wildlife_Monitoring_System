@@ -22,14 +22,26 @@ $PYTHON_CMD -c 'import sys; exit(1) if sys.version_info < (3, 10) else exit(0)' 
 # 2. Create/Find Virtual Environment
 if [ ! -d "venv" ]; then
     echo "Creating virtual environment 'venv'..."
-    $PYTHON_CMD -m venv venv
+    if ! $PYTHON_CMD -m venv venv; then
+        echo "Error: Failed to create virtual environment."
+        echo "If you are on Ubuntu/Debian, you may need to install the venv package first:"
+        echo "  sudo apt install python3-venv"
+        exit 1
+    fi
 else
     echo "Virtual environment 'venv' already exists."
 fi
 
 # 3. Activate it
 echo "Activating virtual environment..."
-source venv/bin/activate
+if [ -f "venv/bin/activate" ]; then
+    source venv/bin/activate
+elif [ -f "venv/Scripts/activate" ]; then
+    source venv/Scripts/activate
+else
+    echo "Error: Could not find activation script in venv/bin or venv/Scripts."
+    exit 1
+fi
 
 # 4. Install dependencies
 echo "Installing dependencies..."
