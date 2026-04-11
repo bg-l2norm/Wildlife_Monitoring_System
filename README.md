@@ -17,7 +17,9 @@ Before installing, ensure your Windows machine has the following:
 * **NVIDIA GPU Drivers:** Required for hardware acceleration.
 * **Eclipse Mosquitto:** [Download Mosquitto for Windows](https://mosquitto.org/download/). This is the MQTT broker that allows your ESP32 to talk to the Python server. Install it and ensure the "Mosquitto Broker" service is running in Windows Services.
 ---
-*(Note: You must add  "listener 1883 0.0.0.0" "allow_anonymous true" at the end of mosquitto.conf file).*
+*(Note: You must add the following at the end of the mosquitto.conf file:
+listener 1883 0.0.0.0
+allow_anonymous true)*
 
 ## 2. Project Setup
 
@@ -33,7 +35,7 @@ py -3.10 -m venv venv
 
 *(Note: You must run `.\venv\Scripts\activate` every time you open a new terminal to work on this project).*
 
-### Install `requirements.txt and CUDA  11.8`
+### Install `requirements.txt` and CUDA 11.8
 
 
 NVIDIA GPU (CUDA 11.8)
@@ -134,9 +136,10 @@ python app.py
 ## Troubleshooting
 
 * **Server is running, but the browser says "Site cannot be reached" (HTTP 404/Refused):**
-Windows Defender Firewall is likely blocking Python. Restart the server and check BOTH "Private" and "Public" networks on the Windows defender .
+Windows Defender Firewall is likely blocking Python. Restart the server and check BOTH "Private" and "Public" networks on the Windows Defender.
 * **Model Load Error: `No such file or directory 'info.json'`:**
-Your Kaggle model files are extracted into a subfolder. Move them out of the `archive` folder directly into `speciesnet_model`.* **MQTT Connection Error:**
+Your Kaggle model files are extracted into a subfolder. Move them out of the `archive` folder directly into `speciesnet_model`.
+* **MQTT Connection Error:**
 Ensure Mosquitto is installed and the Windows Service is actively running. The script attempts to connect to `127.0.0.1` on port `1883`.
 
 
