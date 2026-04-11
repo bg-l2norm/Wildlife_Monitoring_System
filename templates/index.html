@@ -525,6 +525,16 @@ video { width: 100%; display: block; max-height: 500px; }
     ];
     
     let sortingAnimationInterval = null;
+    let sortingTimeouts = [];
+
+    function safeSetTimeout(callback, delay) {
+        const id = setTimeout(() => {
+            sortingTimeouts = sortingTimeouts.filter(t => t !== id);
+            callback();
+        }, delay);
+        sortingTimeouts.push(id);
+        return id;
+    }
     let currentQueue = [];
     let userLocation = null;
 
@@ -577,12 +587,12 @@ video { width: 100%; display: block; max-height: 500px; }
             el.textContent = animal.emoji;
             el.dataset.index = index;
             queueContainer.appendChild(el);
-            setTimeout(() => {
+            safeSetTimeout(() => {
                 el.classList.add('visible');
                 if (index === 0) el.classList.add('current');
             }, index * 100 + 200);
         });
-        setTimeout(startSorting, currentQueue.length * 100 + 800);
+        safeSetTimeout(startSorting, currentQueue.length * 100 + 800);
     }
 
     function startSorting() {
@@ -591,7 +601,7 @@ video { width: 100%; display: block; max-height: 500px; }
             if (index >= currentQueue.length) {
                 clearInterval(sortingAnimationInterval);
                 sortingAnimationInterval = null;
-                setTimeout(celebrateAll, 400);
+                safeSetTimeout(celebrateAll, 400);
                 return;
             }
             const animal = currentQueue[index];
@@ -607,38 +617,40 @@ video { width: 100%; display: block; max-height: 500px; }
         const laneAnimals = document.getElementById(`lane-${animal.speciesId}`);
         scrollToLane(animal.speciesId);
         document.querySelectorAll('.species-lane').forEach(l => l.classList.remove('highlight'));
-        setTimeout(() => lane.classList.add('highlight'), 200);
+        safeSetTimeout(() => lane.classList.add('highlight'), 200);
         if (queueEl) { queueEl.classList.remove('current'); queueEl.classList.add('sorting'); }
-        if (nextQueueEl) { setTimeout(() => nextQueueEl.classList.add('current'), 300); }
-        setTimeout(() => {
+        if (nextQueueEl) { safeSetTimeout(() => nextQueueEl.classList.add('current'), 300); }
+        safeSetTimeout(() => {
             if (queueEl) queueEl.remove();
             const laneAnimal = document.createElement('span');
             laneAnimal.className = 'lane-animal';
             laneAnimal.textContent = animal.emoji;
             laneAnimals.appendChild(laneAnimal);
-            setTimeout(() => {
+            safeSetTimeout(() => {
                 laneAnimal.classList.add('placed');
                 laneAnimal.classList.add('happy');
             }, 50);
-            setTimeout(() => laneAnimal.classList.remove('happy'), 750);
+            safeSetTimeout(() => laneAnimal.classList.remove('happy'), 750);
         }, 500);
     }
 
     function celebrateAll() {
         document.querySelectorAll('.lane-animal.placed:not(.pre-existing)').forEach((el, i) => {
-            setTimeout(() => {
+            safeSetTimeout(() => {
                 el.classList.add('happy');
-                setTimeout(() => el.classList.remove('happy'), 700);
+                safeSetTimeout(() => el.classList.remove('happy'), 700);
             }, i * 80);
         });
         document.querySelectorAll('.species-lane').forEach(l => l.classList.remove('highlight'));
         document.getElementById('lanes-container').style.transform = 'translateY(0)';
-        setTimeout(() => {
+        safeSetTimeout(() => {
             if (document.getElementById('scene1').classList.contains('active')) initSortingAnimation();
         }, 3500);
     }
 
     function stopSortingAnimation() {
+        sortingTimeouts.forEach(clearTimeout);
+        sortingTimeouts = [];
         if (sortingAnimationInterval) { clearInterval(sortingAnimationInterval); sortingAnimationInterval = null; }
     }
 
@@ -652,9 +664,9 @@ video { width: 100%; display: block; max-height: 500px; }
         }).join(' ');
         const wordElements = element.querySelectorAll('.word');
         wordElements.forEach((word, i) => {
-            setTimeout(() => {
+            safeSetTimeout(() => {
                 word.classList.add('visible');
-                if (i === wordElements.length - 1 && callback) setTimeout(callback, 400);
+                if (i === wordElements.length - 1 && callback) safeSetTimeout(callback, 400);
             }, i * 120);
         });
     }
@@ -677,20 +689,20 @@ video { width: 100%; display: block; max-height: 500px; }
         }
 
         if (numOrId === 1) {
-            setTimeout(() => {
+            safeSetTimeout(() => {
                 document.getElementById('hero-title').classList.add('visible');
                 document.getElementById('hero-subtitle').classList.add('visible');
             }, 100);
-            setTimeout(initSortingAnimation, 400);
+            safeSetTimeout(initSortingAnimation, 400);
             typewriterWords(punchLine, 'punch-line', () => {
-                setTimeout(() => document.getElementById('context-line').classList.add('visible'), 300);
-                setTimeout(() => document.querySelectorAll('#scene1 .btn').forEach((btn, i) => setTimeout(() => btn.classList.add('visible'), i * 100)), 700);
+                safeSetTimeout(() => document.getElementById('context-line').classList.add('visible'), 300);
+                safeSetTimeout(() => document.querySelectorAll('#scene1 .btn').forEach((btn, i) => safeSetTimeout(() => btn.classList.add('visible'), i * 100)), 700);
             }, ['protect', 'don\'t', 'know']);
         } else if (numOrId === 2) {
-            setTimeout(() => document.getElementById('step1').classList.add('visible'), 200);
-            setTimeout(() => document.getElementById('step2').classList.add('visible'), 400);
-            setTimeout(() => document.getElementById('step3').classList.add('visible'), 600);
-            setTimeout(() => document.getElementById('btn-go').classList.add('visible'), 800);
+            safeSetTimeout(() => document.getElementById('step1').classList.add('visible'), 200);
+            safeSetTimeout(() => document.getElementById('step2').classList.add('visible'), 400);
+            safeSetTimeout(() => document.getElementById('step3').classList.add('visible'), 600);
+            safeSetTimeout(() => document.getElementById('btn-go').classList.add('visible'), 800);
         } else if (numOrId === 3) {
             document.getElementById('file-input').value = '';
         } 
@@ -783,7 +795,7 @@ video { width: 100%; display: block; max-height: 500px; }
     }
 
     // Start
-    setTimeout(() => { const firstGroup = speciesGroups[0].id; scrollToLane(firstGroup); }, 100);
+    safeSetTimeout(() => { const firstGroup = speciesGroups[0].id; scrollToLane(firstGroup); }, 100);
     showScene(1);
 
     // ==========================================
@@ -868,10 +880,11 @@ video { width: 100%; display: block; max-height: 500px; }
         formData.append('source', 'web');
         // NOTE: sample_fps and min_confidence inputs have been completely removed from here
         
+        let interval = null;
         try {
             // Fake progress for UX
             let fakeProgress = 10;
-            const interval = setInterval(() => {
+            interval = setInterval(() => {
                 if(fakeProgress < 90) {
                     fakeProgress += 5;
                     progressBar.style.width = fakeProgress + '%';
@@ -907,6 +920,7 @@ video { width: 100%; display: block; max-height: 500px; }
             alert('Upload failed: ' + e.message);
             progressArea.style.display = 'none';
         } finally {
+            if (interval) clearInterval(interval);
             // Unlock the UI whether it succeeded or failed
             isUploadingVideo = false;
             btn.disabled = false;
@@ -971,7 +985,6 @@ video { width: 100%; display: block; max-height: 500px; }
         const player = document.getElementById('mainPlayer');
         player.currentTime = seconds;
         player.play();
-        player.scrollIntoView({ behavior: 'smooth', block: 'center' });
     }
 
     let wasVideoPlaying = false;
