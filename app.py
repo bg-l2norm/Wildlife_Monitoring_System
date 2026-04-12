@@ -12,7 +12,6 @@ import base64
 import json
 import time
 import uuid
-import gc
 
 # Third-party imports
 import cv2
