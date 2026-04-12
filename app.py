@@ -75,9 +75,10 @@ for folder in [DETECTIONS_DIR, VIDEO_DIR, TEMP_DIR, UPLOAD_DIR, os.path.join(BAS
 
 # Initialize the Flask Web App
 app = Flask(__name__)
-CORS(app) # Allows front-end to talk to back-end easily
-# Initialize WebSockets for real-time dashboard updates
-socketio = SocketIO(app, cors_allowed_origins="*")
+# Restrict CORS to trusted origins
+CORS(app, origins=["http://127.0.0.1:5000", "http://localhost:5000"])
+# Initialize WebSockets with restricted origins for real-time dashboard updates
+socketio = SocketIO(app, cors_allowed_origins=["http://127.0.0.1:5000", "http://localhost:5000"])
 # Detect if we have a GPU available
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
