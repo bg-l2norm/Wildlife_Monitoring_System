@@ -927,6 +927,9 @@ def update_settings():
         if not data:
             return jsonify({"success": False, "error": "No data provided"}), 400
 
+        # 🚀 PERFORMANCE OPTIMIZATION: Collect all location updates for bulk processing
+        location_updates = {}
+
         # Loop through incoming data and update the config if the key exists
         for key, value in data.items():
             if key in APP_CONFIG:
@@ -940,28 +943,31 @@ def update_settings():
                 elif isinstance(APP_CONFIG[key], str):
                     APP_CONFIG[key] = str(value).strip()
 
-                # ==========================================
-                # 🚀 NEW: INTERCEPT LOCATIONS FOR DATABASE
-                # ==========================================
+                # Collect location updates
                 if key.startswith("location_"):
-                    # Extract the node_id (e.g., "location_main" becomes "main")
                     node_id = key.replace("location_", "")
-                    new_location = str(value).strip()
+                    location_updates[node_id] = str(value).strip()
 
-                    # 1. Update SQLite Database permanently
-                    config = NodeConfig.query.filter_by(node_id=node_id).first()
-                    if not config:
-                        config = NodeConfig(node_id=node_id, location=new_location)
-                        db.session.add(config)
-                    else:
-                        config.location = new_location
-                    db.session.commit()
+        # Perform bulk database operations for locations
+        if location_updates:
+            # 1. Bulk query all existing configs in one go
+            existing_configs = NodeConfig.query.filter(NodeConfig.node_id.in_(location_updates.keys())).all()
+            config_map = {c.node_id: c for c in existing_configs}
 
-                    # 2. Update Active Memory for instant WebSocket broadcast
-                    if node_id in fleet_state:
-                        fleet_state[node_id]["location"] = new_location
+            for node_id, new_location in location_updates.items():
+                if node_id in config_map:
+                    config_map[node_id].location = new_location
+                else:
+                    new_config = NodeConfig(node_id=node_id, location=new_location)
+                    db.session.add(new_config)
 
-                    print(f"📍 Database Updated: {node_id.upper()} location saved as '{new_location}'")
+                # 2. Update Active Memory for instant WebSocket broadcast
+                if node_id in fleet_state:
+                    fleet_state[node_id]["location"] = new_location
+
+            # 3. Commit everything at once (Significant performance boost for SQLite)
+            db.session.commit()
+            print(f"📍 Bulk Database Update: {len(location_updates)} locations saved.")
 
         print(f"⚙️ Settings updated via API: {APP_CONFIG}")
         return jsonify({"success": True, "settings": APP_CONFIG})
