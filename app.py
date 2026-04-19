@@ -860,15 +860,10 @@ def upload_video():
 @app.route('/api/history')
 def get_history():
     """Endpoint to fetch past detections for the dashboard."""
-    videos = VideoRecord.query.options(joinedload(VideoRecord.detections)).order_by(VideoRecord.upload_time.desc()).limit(50).all()
+    videos = VideoRecord.query.join(VideoRecord.detections).options(joinedload(VideoRecord.detections)).order_by(VideoRecord.upload_time.desc()).distinct().limit(50).all()
     output = []
 
     for v in videos:
-        # Since we did the "Empty Video Purge" during upload,
-        # any video with 0 detections in the DB can just be skipped
-        if not v.detections:
-            continue
-
         # Sort the already-clean detections chronologically
         sorted_detections = sorted(v.detections, key=lambda x: x.timestamp_in_video)
 
