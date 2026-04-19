@@ -11,6 +11,12 @@ This project integrates Google’s SpeciesNet for wildlife classification with a
 
 ---
 
+
+## Screenshots
+
+![Dashboard](assets/dashboard.png)
+![Sensor Alerts](assets/sensor_alerts.png)
+
 ## 1. Prerequisites
 Before installing, ensure your Windows machine has the following:
 * **Python 3.10.11:** [Download Python](https://www.python.org/downloads/) (Make sure to check "Add Python to PATH" during installation).
