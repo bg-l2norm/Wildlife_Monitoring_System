@@ -7,7 +7,6 @@ import os
 os.environ["ONNXRUNTIME_EXECUTION_PROVIDERS"] = "CPUExecutionProvider"
 
 # Standard library imports
-import shutil
 import base64
 import json
 import time
