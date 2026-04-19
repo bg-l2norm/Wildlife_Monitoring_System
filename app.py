@@ -801,10 +801,14 @@ def detect():
 # ==========================================
 
 @socketio.on('connect')
-def handle_connect(auth=None): # Added auth=None to fix the TypeError
+def handle_connect(auth=None):
     """
     Fires the moment a user opens the web dashboard.
     Sends the current hardware state immediately so the UI doesn't load empty.
+
+    Args:
+        auth (dict, optional): Optional authentication data from the client.
+                              Defaults to None to prevent TypeError if no data is sent.
     """
     global fleet_state
     t = time.time()
