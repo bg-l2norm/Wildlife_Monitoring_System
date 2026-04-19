@@ -139,6 +139,16 @@ class SensorEvent(db.Model):
     event_type = db.Column(db.String(50), nullable=False)  # e.g., 'motion', 'tilt', 'gunshot'
     value = db.Column(db.Float, nullable=True)             # e.g., the specific tilt angle
     timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def to_dict(self):
+        """Returns a dictionary representation of the sensor event."""
+        return {
+            "id": self.id,
+            "type": self.event_type,
+            "value": self.value,
+            "timestamp": self.timestamp.isoformat() + "Z"
+        }
+
 class NodeConfig(db.Model):
     """Database table to permanently store node settings like Location."""
     id = db.Column(db.Integer, primary_key=True)
@@ -884,14 +894,7 @@ def get_sensor_history():
     try:
         # Get the 50 most recent events from the database
         events = SensorEvent.query.order_by(SensorEvent.timestamp.desc()).limit(50).all()
-        output = []
-        for e in events:
-            output.append({
-                "id": e.id,
-                "type": e.event_type,
-                "value": e.value,
-                "timestamp": e.timestamp.isoformat() + "Z" # Format as standard UTC string for JS
-            })
+        output = [e.to_dict() for e in events]
         return jsonify({"success": True, "events": output})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
