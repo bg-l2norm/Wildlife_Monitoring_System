@@ -115,6 +115,18 @@ def send_telegram_alert(message):
     except Exception as e:
         print(f"❌ Telegram Error: {e}")
 
+def draw_bounding_boxes(img, boxes, names):
+    """Draws red bounding boxes and labels on an image."""
+    for box in boxes:
+        x1, y1, x2, y2 = map(int, box.xyxy[0])
+        conf = float(box.conf[0])
+        cls_id = int(box.cls[0])
+        class_name = names[cls_id]
+
+        label = f"{class_name} {conf:.2f}"
+        cv2.rectangle(img, (x1, y1), (x2, y2), (0, 0, 255), 2)  # Red Box
+        cv2.putText(img, label, (x1, max(y1 - 10, 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+
 class VideoRecord(db.Model):
     """Database table to store uploaded video details."""
     id = db.Column(db.Integer, primary_key=True)
@@ -391,15 +403,7 @@ class BatchVideoProcessor:
                                         weapon_conf = float(boxes.conf[0]) # Confidence of top detection
 
                                         # Draw Red Bounding Boxes on the image
-                                        for box in boxes:
-                                            x1, y1, x2, y2 = map(int, box.xyxy[0])
-                                            conf = float(box.conf[0])
-                                            cls_id = int(box.cls[0])
-                                            class_name = weapon_res[0].names[cls_id]
-
-                                            label = f"{class_name} {conf:.2f}"
-                                            cv2.rectangle(img, (x1, y1), (x2, y2), (0, 0, 255), 2) # Red Box
-                                            cv2.putText(img, label, (x1, max(y1 - 10, 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                                        draw_bounding_boxes(img, boxes, weapon_res[0].names)
 
                                         # Send Telegram Alert (ONLY ONCE per video to prevent spam)
                                         if not video_state["alert_sent"]:
@@ -768,16 +772,7 @@ def detect():
                             top_score = float(boxes.conf[0]) # Confidence of the highest scoring box
 
                             # Draw Red Bounding Boxes
-                            for box in boxes:
-                                # YOLO gives us the exact corner coordinates right out of the box
-                                x1, y1, x2, y2 = map(int, box.xyxy[0])
-                                conf = float(box.conf[0])
-                                cls_id = int(box.cls[0])
-                                class_name = weapon_res[0].names[cls_id]
-
-                                label = f"{class_name} {conf:.2f}"
-                                cv2.rectangle(img, (x1, y1), (x2, y2), (0, 0, 255), 2)
-                                cv2.putText(img, label, (x1, max(y1 - 10, 10)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+                            draw_bounding_boxes(img, boxes, weapon_res[0].names)
 
                             # Convert the drawn image back to base64
                             _, buffer = cv2.imencode('.jpg', img)
