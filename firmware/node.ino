@@ -26,7 +26,7 @@ const int wificonfig_button = 5;
 const int wifiLedPin = 2;      
 const int gunshotLedPin = 4;   
 
-// I2S Microphone (Mono)
+// I2S Microphone (Stereo)
 #define I2S_WS 15
 #define I2S_SD 33
 #define I2S_SCK 14
@@ -48,7 +48,7 @@ const int gunshotLedPin = 4;
 static unsigned long lastHeartbeat = 0;
 
 // ==========================================
-// AUDIO & FFT CONFIG (MONO ADAPTIVE)
+// AUDIO & FFT CONFIG (STEREO ADAPTIVE)
 // ==========================================
 #define SOFTWARE_GAIN_FACTOR 0.8
 #define TRIGGER_AMP_THRESHOLD 4000
@@ -137,7 +137,7 @@ void configModeCallback(WiFiManager *myWiFiManager) {
 }
 
 // ==========================================
-// CORE 0: HYBRID STEREO-TO-MONO AUDIO TASK 
+// CORE 0: STEREO-TO-MONO AUDIO TASK
 // ==========================================
 void AudioProcessingTask(void * parameter) {
   enum State { IDLE, TRIGGERED };
@@ -146,7 +146,6 @@ void AudioProcessingTask(void * parameter) {
   int consecutiveLoudChunks = 0;
   int16_t peak_amplitude_of_event = 0;
 
-  // FIX 1: Doubled buffer size for Stereo data
   int32_t samples32[SAMPLES_PER_CHUNK * 2]; 
   int16_t samplesMono[SAMPLES_PER_CHUNK];
   size_t bytes_read;
@@ -158,12 +157,12 @@ void AudioProcessingTask(void * parameter) {
       
       int32_t mean = 0;
 
-      // FIX 2: Convert Stereo to Mono and apply `>> 14` volume boost
+      // Convert Stereo to Mono (averaged)
       for (int i = 0; i < SAMPLES_PER_CHUNK; i++) {
-        int32_t left = samples32[i * 2] >> 14;
-        int32_t right = samples32[i * 2 + 1] >> 14;
+        int32_t left = samples32[i * 2] >> 16;
+        int32_t right = samples32[i * 2 + 1] >> 16;
 
-        int16_t mixedMono = (int16_t)(left + right);
+        int16_t mixedMono = (int16_t)((left + right) / 2);
         
         samplesMono[i] = mixedMono;
         mean += mixedMono;
@@ -262,7 +261,7 @@ void AudioProcessingTask(void * parameter) {
                 gunshotZCR = peak_zcr;
                 gunshotDetected = true; 
                 
-                Serial.println(" -> >>> MONO GUNSHOT CONFIRMED <<<");
+                Serial.println(" -> >>> STEREO GUNSHOT CONFIRMED <<<");
               } else {
                  Serial.println(" -> REJECTED");
               }
@@ -566,7 +565,7 @@ void loop() {
 }
 
 // ==========================================
-// I2S INIT (FIX 3: STEREO + FLAG CONFIG)
+// I2S INIT (STEREO + FLAG CONFIG)
 // ==========================================
 void i2sInit() {
   i2s_config_t i2s_config = {
