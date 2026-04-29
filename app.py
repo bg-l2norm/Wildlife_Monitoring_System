@@ -134,7 +134,7 @@ class VideoRecord(db.Model):
     filepath = db.Column(db.String(255), nullable=False)
     upload_time = db.Column(db.DateTime, default=datetime.utcnow)
     processed = db.Column(db.Boolean, default=False)
-    detections = db.relationship('DetectionResult', backref='video', lazy=True)
+    detections = db.relationship('DetectionResult', backref='video', lazy=True, order_by='DetectionResult.timestamp_in_video')
 
 class DetectionResult(db.Model):
     """Database table to store specific animals/weapons found in videos."""
@@ -858,16 +858,13 @@ def get_history():
     output = []
 
     for v in videos:
-        # Sort the already-clean detections chronologically
-        sorted_detections = sorted(v.detections, key=lambda x: x.timestamp_in_video)
-
-        # Format the data for the UI
+        # Format the data for the UI (pre-sorted by the database relationship)
         clean_detections = [{
             "species": d.species,
             "confidence": d.confidence,
             "time": d.timestamp_in_video,
             "image_url": d.image_url
-        } for d in sorted_detections]
+        } for d in v.detections]
 
         output.append({
             "id": v.id,
